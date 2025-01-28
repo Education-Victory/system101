@@ -12,7 +12,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
-interface CustomNodeData {
+interface CustomNodeData extends Record<string, unknown> {
   label: string | React.ReactNode;
   hasTopHandle?: boolean;
   hasLeftHandle?: boolean;
