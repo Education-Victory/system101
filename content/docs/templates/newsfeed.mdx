@@ -1,0 +1,238 @@
+---
+title: Newsfeed
+description: Learn about the newsfeed system architecture, requirements, and API design.
+full: true
+---
+
+import { ArchDiagram } from '@/components/newsfeed/arch'
+import { DatabaseDiagram } from '@/components/newsfeed/db';
+import { Tooltip } from '@/components/ui/tooltip'
+import { AiOutlineQuestionCircle } from 'react-icons/ai';
+
+## Overview
+
+<div className="grid grid-cols-3 gap-4">
+<div className="border-2 border-gray-200 rounded-lg p-4">
+    <h3 className="font-bold mb-4">Requirements</h3>
+    <div className="mb-4">
+      <h4 className="font-semibold mb-2">Functional Requirements</h4>
+      <ul className="list-disc ml-4">
+        <li>Post multimedia content (text, image)</li>
+        <li><Tooltip content="Users can view a personalized feed that aggregates posts from followed users, trending content, and suggested posts based on interests.">Browse the feed</Tooltip></li>
+        <li>Interact with content (like, comment)</li>
+        <li>Follow and unfollow users</li>
+        <li>Search for users and hashtags</li>
+      </ul>
+    </div>
+
+    <div className="mb-4">
+      <h4 className="font-semibold mb-2">Non-Functional Requirements</h4>
+      <ul className="list-disc ml-4">
+        <li><Tooltip content="The system should provide instant updates and interactions, with minimal delay in content delivery.">Low Latency</Tooltip></li>
+        <li><Tooltip content="The service should be operational 99.99% of the time, ensuring uninterrupted access.">High Availability</Tooltip></li>
+        <li><Tooltip content="The feed should maintain a uniform state across different devices and sessions, ensuring users see the same content.">Consistency</Tooltip></li>
+        <li>Scalability</li>
+        <li>Security and Privacy</li>
+      </ul>
+    </div>
+</div>
+
+  <div className="border-2 border-gray-200 rounded-lg p-4">
+    <h3 className="font-bold mb-4">System Architecture</h3>
+    <div className="mb-4">
+      <h4 className="font-semibold mb-2">Key Strategies</h4>
+      <ul className="list-disc ml-4">
+        <li><Tooltip content="Fan-Out: When a user posts content, it is immediately distributed to their followers' feeds. Fan-In: Aggregates user interactions (likes, comments) from multiple sources to update the original post and user notifications efficiently.">Fan-Out/Fan-In Strategy</Tooltip></li>
+        <li><Tooltip content="Ensures that users see their own updates (likes, comments, new posts) immediately after they perform an action.">Read-Your-Writes Consistency</Tooltip></li>
+        <li>Data replication across servers</li>
+      </ul>
+    </div>
+
+    <div>
+      <h4 className="font-semibold mb-2">Architectural Styles</h4>
+      <ul className="list-disc ml-4">
+        <li><Tooltip content="Implement an event-driven approach to handle user interactions and system events. This allows for asynchronous processing and decouples components, facilitating scalability and maintainability.">Event-Driven Architecture</Tooltip></li>
+        <li><Tooltip content="Design the system using microservices to isolate different functionalities (e.g., user management, feed generation, notifications). This promotes independent deployment, scaling, and easier maintenance.">Microservices Structure</Tooltip></li>
+      </ul>
+    </div>
+  </div>
+
+  <div className="border-2 border-gray-200 rounded-lg p-4">
+    <h3 className="font-bold mb-4">Design Patterns</h3>
+    <div className="mb-4">
+      <h4 className="font-semibold mb-2">Fan-Out/Fan-In Strategy</h4>
+      <ul className="list-disc ml-4">
+        <li>Push Model: Updates are directly pushed to all followers' feeds.</li>
+        <li>Pull Model: Followers fetch updates from the original poster's feed.</li>
+        <li>Hybrid Model: Combines push for critical updates and pull for less urgent ones.</li>
+      </ul>
+    </div>
+    <div className="mb-4">
+      <h4 className="font-semibold mb-2">Event Sourcing Pattern</h4>
+      <ul className="list-disc ml-4">
+        <li><Tooltip content="Instead of just saving the current state of a feed, store each change (event) that happens.">Store Events</Tooltip></li>
+        <li><Tooltip content="If something goes wrong or if you need to recover data, you can replay these events to reconstruct the feed’s history.">Replay Events</Tooltip></li>
+      </ul>
+    </div>
+
+    <div>
+      <h4 className="font-semibold mb-2">Sharding Pattern</h4>
+      <ul className="list-disc ml-4">
+        <li><Tooltip content="Divide the database based on geographical areas. This helps reduce latency for users accessing their feeds by connecting them to a closer server.">Shard by user region</Tooltip></li>
+        <li><Tooltip content="Group users based on their activity levels (e.g., high, medium, low). This allows you to manage resources better and optimize performance for active users.">Shard by activity level</Tooltip></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+## System Architecture
+<ArchDiagram/>
+
+### 1. Authentication Flow
+
+1. Client initiates secure authentication by requesting a token from Token Server. After validating credentials, Token Server issues a secure JWT token.
+2. Using the authenticated token, Client uploads media to Media Storage. The system then processes uploads, generates optimized thumbnails, and prepares content for CDN distribution.
+
+### 2. Post Creation Process
+1. Client assembles post content (text/media) and transmits through API Gateway, which manages rate limiting and performs preliminary request validation.
+2. Web Server conducts thorough content validation and permission checks. Queue system handles traffic management and ensures reliable message delivery.
+
+### 3. Content Distribution Strategy
+1. Work Server queries User Relationship DB to determine follower relationships and distribution method.
+2. Fanout Strategy (< 10K followers): Immediately pushes new content to followers' Timeline Cache, enabling real-time updates.
+3. Pull Strategy (> 10K followers): Implements lazy loading where content is retrieved when followers access their feed, optimizing system resources.
+
+## Database Design
+<DatabaseDiagram/>
+
+
+## API Design
+
+```python
+class NewsFeedAPI:
+    def create_post(user_id: UUID, content: string, media_files: List[File]) -> Post:
+        """Create a new post with optional media attachments"""
+        # 1. Validate user and content
+        validate_user(user_id)
+        validate_content(content)
+        
+        # 2. Upload media files to CDN/Storage
+        media_urls = media_service.upload_files(media_files)
+        
+        # 3. Create post in database
+        post = Post(
+            user_id=user_id,
+            content=content,
+            media_urls=media_urls
+        )
+        db.posts.insert(post)
+        
+        # 4. Publish event to message queue for async processing
+        event = {
+            "type": "NEW_POST",
+            "post_id": post.id,
+            "user_id": user_id
+        }
+        message_queue.publish("post_events", event)
+        return post
+
+    def get_newsfeed(user_id: UUID, page: int, limit: int) -> List[Post]:
+        """Get user's newsfeed with pagination"""
+        # 1. Try to get from cache first
+        cached_feed = cache.get(f"feed:{user_id}:{page}")
+        if cached_feed:
+            return cached_feed
+        
+        # 2. Get timeline entries from cache/database
+        timeline_entries = timeline_cache.get_entries(
+            user_id=user_id,
+            offset=page * limit,
+            limit=limit
+        )
+        
+        # 3. Fetch full post data
+        post_ids = [entry.post_id for entry in timeline_entries]
+        posts = db.posts.find({"id": {"$in": post_ids}})
+        
+        # 4. Apply ranking algorithm
+        ranked_posts = ranking_service.rank_posts(posts, user_id)
+        
+        # 5. Cache the results
+        cache.set(
+            f"feed:{user_id}:{page}",
+            ranked_posts,
+            expire=300  # 5 minutes
+        )
+        
+        return ranked_posts
+```
+
+## Interview Questions
+<div className="grid grid-cols-3 gap-4">
+    <div className="col-span-3 border-2 border-gray-200 rounded-lg p-4">
+        <div className="space-y-6">
+            <div>
+                <p className="font-semibold mb-2">How would you ensure low latency for instant updates across a globally distributed user base?</p>
+                <ul className="list-disc pl-5 space-y-1">
+                    <li>Implement multi-region CDNs with edge caching for static content and frequently accessed posts</li>
+                    <li>Use multi-level caching strategy (browser, CDN, application, database) with Redis/Memcached</li>
+                    <li>Shard databases by user_id with read replicas for heavy read operations</li>
+                </ul>
+            </div>
+            
+            <div>
+                <p className="font-semibold mb-2">How would you guarantee consistency in the news feed across multiple devices?</p>
+                <ul className="list-disc pl-5 space-y-1">
+                    <li>Implement version vectors or logical clocks to track update sequence across devices</li>
+                    <li>Use optimistic concurrency control with last-write-wins for conflict resolution</li>
+                    <li>Maintain a central source of truth with event sourcing for state reconstruction</li>
+                </ul>
+            </div>
+            
+            <div>
+                <p className="font-semibold mb-2">How would you design a system to identify and display trending hashtags in real-time?</p>
+                <ul className="list-disc pl-5 space-y-1">
+                    <li>Use Apache Kafka/Kinesis for real-time stream processing of hashtag usage</li>
+                    <li>Implement sliding window counters with Redis for temporal trending analysis</li>
+                    <li>Apply decay factors to older data for recency-biased trending algorithms</li>
+                </ul>
+            </div>
+            
+            <div>
+                <p className="font-semibold mb-2">How would you track and display real-time analytics for trending content?</p>
+                <ul className="list-disc pl-5 space-y-1">
+                    <li>Use stream processing (Apache Flink/Storm) for real-time event aggregation</li>
+                    <li>Implement counter sharding with eventual consistency for high-volume metrics</li>
+                    <li>Maintain pre-aggregated statistics in Redis with periodic persistence to database</li>
+                </ul>
+            </div>
+            
+            <div>
+                <p className="font-semibold mb-2">How would you design a system to deliver real-time notifications to millions of users?</p>
+                <ul className="list-disc pl-5 space-y-1">
+                    <li>Use WebSocket connections with connection pooling for persistent connections</li>
+                    <li>Implement message queues (RabbitMQ/Kafka) for reliable message delivery</li>
+                    <li>Deploy notification service across multiple regions with local presence</li>
+                </ul>
+            </div>
+            
+            <div>
+                <p className="font-semibold mb-2">How would you handle data hotspots from viral content?</p>
+                <ul className="list-disc pl-5 space-y-1">
+                    <li>Implement adaptive caching with automatic promotion of viral content</li>
+                    <li>Use rate limiting and request throttling based on user/content popularity</li>
+                    <li>Deploy dynamic read replicas for hot data partitions</li>
+                </ul>
+            </div>
+            
+            <div>
+                <p className="font-semibold mb-2">How would you ensure data privacy and compliance with regulations?</p>
+                <ul className="list-disc pl-5 space-y-1">
+                    <li>Implement end-to-end encryption for sensitive data with proper key management</li>
+                    <li>Use role-based access control with detailed audit logging of all data access</li>
+                    <li>Deploy data retention policies with automated deletion/anonymization workflows</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
